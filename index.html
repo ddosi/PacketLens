@@ -2979,7 +2979,36 @@ function eth(ctx, off, end) {
     17513: 'application_settings', 65037: 'encrypted_client_hello', 65281: 'renegotiation_info'
   };
   var GREASE = { 0x0a0a: 1, 0x1a1a: 1, 0x2a2a: 1, 0x3a3a: 1, 0x4a4a: 1, 0x5a5a: 1, 0x6a6a: 1, 0x7a7a: 1, 0x8a8a: 1, 0x9a9a: 1, 0xaaaa: 1, 0xbaba: 1, 0xcaca: 1, 0xdada: 1, 0xeaea: 1, 0xfafa: 1 };
-  var GRPS = { 23: 'secp256r1', 24: 'secp384r1', 25: 'secp521r1', 29: 'x25519', 30: 'x448', 256: 'ffdhe2048', 257: 'ffdhe3072', 4588: 'X25519MLKEM768', 25497: 'X25519Kyber768' };
+  var GRPS = {
+    22: 'secp256k1', 23: 'secp256r1', 24: 'secp384r1', 25: 'secp521r1',
+    26: 'brainpoolP256r1', 27: 'brainpoolP384r1', 28: 'brainpoolP512r1',
+    29: 'x25519', 30: 'x448',
+    31: 'brainpoolP256r1tls13', 32: 'brainpoolP384r1tls13', 33: 'brainpoolP512r1tls13',
+    41: 'curveSM2',
+    256: 'ffdhe2048', 257: 'ffdhe3072', 258: 'ffdhe4096', 259: 'ffdhe6144', 260: 'ffdhe8192',
+    // 新增：PQC（FIPS 203 ML-KEM）与国密混合群，取值对齐 IANA TLS Supported Groups
+    512: 'MLKEM512', 513: 'MLKEM768', 514: 'MLKEM1024',
+    4585: 'SecP256r1MLKEM512', 4586: 'MLKEM512X25519', 4587: 'SecP256r1MLKEM768',
+    4588: 'X25519MLKEM768', 4589: 'SecP384r1MLKEM1024', 4590: 'curveSM2MLKEM768',
+    25497: 'X25519Kyber768Draft00', 25498: 'SecP256r1Kyber768Draft00'
+  };
+  // 新增：TLS SignatureScheme 名称表（供扩展 13 signature_algorithms / 扩展 50 显示），取值对齐 IANA TLS SignatureScheme
+  var SIGALG = {
+    0x0201: 'rsa_pkcs1_sha1', 0x0203: 'ecdsa_sha1',
+    0x0401: 'rsa_pkcs1_sha256', 0x0403: 'ecdsa_secp256r1_sha256', 0x0420: 'rsa_pkcs1_sha256_legacy',
+    0x0501: 'rsa_pkcs1_sha384', 0x0503: 'ecdsa_secp384r1_sha384', 0x0520: 'rsa_pkcs1_sha384_legacy',
+    0x0601: 'rsa_pkcs1_sha512', 0x0603: 'ecdsa_secp521r1_sha512', 0x0620: 'rsa_pkcs1_sha512_legacy',
+    0x0708: 'sm2sig_sm3',
+    0x0804: 'rsa_pss_rsae_sha256', 0x0805: 'rsa_pss_rsae_sha384', 0x0806: 'rsa_pss_rsae_sha512',
+    0x0807: 'ed25519', 0x0808: 'ed448',
+    0x0809: 'rsa_pss_pss_sha256', 0x080A: 'rsa_pss_pss_sha384', 0x080B: 'rsa_pss_pss_sha512',
+    0x081A: 'ecdsa_brainpoolP256r1tls13_sha256', 0x081B: 'ecdsa_brainpoolP384r1tls13_sha384', 0x081C: 'ecdsa_brainpoolP512r1tls13_sha512',
+    0x0904: 'mldsa44', 0x0905: 'mldsa65', 0x0906: 'mldsa87',
+    0x0911: 'slhdsa_sha2_128s', 0x0912: 'slhdsa_sha2_128f', 0x0913: 'slhdsa_sha2_192s',
+    0x0914: 'slhdsa_sha2_192f', 0x0915: 'slhdsa_sha2_256s', 0x0916: 'slhdsa_sha2_256f',
+    0x0917: 'slhdsa_shake_128s', 0x0918: 'slhdsa_shake_128f', 0x0919: 'slhdsa_shake_192s',
+    0x091A: 'slhdsa_shake_192f', 0x091B: 'slhdsa_shake_256s', 0x091C: 'slhdsa_shake_256f'
+  };
   function tlsRecords(b, off, end, maxRec) {
     var recs = [], o = off, guard = 0, cap = maxRec || 20000;
     while (o + 5 <= end && guard++ < cap) {
@@ -3123,16 +3152,27 @@ function eth(ctx, off, end) {
     '1.2.840.10045.2.1': 'ecPublicKey', '1.2.840.10045.4.3.2': 'ecdsa-with-SHA256', '1.2.840.10045.4.3.3': 'ecdsa-with-SHA384',
     '1.3.101.112': 'Ed25519', '2.5.29.17': 'subjectAltName', '2.5.29.19': 'basicConstraints', '2.5.29.15': 'keyUsage',
     '2.5.29.37': 'extKeyUsage', '2.5.29.14': 'subjectKeyIdentifier', '2.5.29.35': 'authorityKeyIdentifier',
-    // 新增 PQC 签名算法 OID (NIST FIPS 204/205)
+    // PQC 签名算法 OID（NIST CSOR sigAlgs 弧，对齐 OpenSSL objects.txt）
     '2.16.840.1.101.3.4.3.17': 'id-ml-dsa-44',
     '2.16.840.1.101.3.4.3.18': 'id-ml-dsa-65',
     '2.16.840.1.101.3.4.3.19': 'id-ml-dsa-87',
     '2.16.840.1.101.3.4.3.20': 'id-slh-dsa-sha2-128s',
-    // 新增国密算法 OID
-    '1.2.156.10197.1.501': 'sm2',
+    '2.16.840.1.101.3.4.3.21': 'id-slh-dsa-sha2-128f',
+    '2.16.840.1.101.3.4.3.22': 'id-slh-dsa-sha2-192s',
+    '2.16.840.1.101.3.4.3.23': 'id-slh-dsa-sha2-192f',
+    '2.16.840.1.101.3.4.3.24': 'id-slh-dsa-sha2-256s',
+    '2.16.840.1.101.3.4.3.25': 'id-slh-dsa-sha2-256f',
+    '2.16.840.1.101.3.4.3.26': 'id-slh-dsa-shake-128s',
+    '2.16.840.1.101.3.4.3.27': 'id-slh-dsa-shake-128f',
+    '2.16.840.1.101.3.4.3.28': 'id-slh-dsa-shake-192s',
+    '2.16.840.1.101.3.4.3.29': 'id-slh-dsa-shake-192f',
+    '2.16.840.1.101.3.4.3.30': 'id-slh-dsa-shake-256s',
+    '2.16.840.1.101.3.4.3.31': 'id-slh-dsa-shake-256f',
+    // 新增国密算法 OID（GM/T 0006；.301 是 SM2 曲线、.501 是 SM2-with-SM3 签名，此前两者标注颠倒）
+    '1.2.156.10197.1.301': 'sm2',
     '1.2.156.10197.1.401': 'sm3',
-    '1.2.156.10197.1.301': 'sm2-sign',
-    '1.2.156.10197.1.301.1': 'sm2-sign-with-sm3'
+    '1.2.156.10197.1.501': 'SM2-with-SM3',
+    '1.2.156.10197.1.504': 'sm3WithRSAEncryption'
   };
   function der(u8, o, end, depth) {
     o = o || 0; if (end == null) end = u8.length; depth = depth || 0;
@@ -3294,6 +3334,7 @@ function eth(ctx, off, end) {
         ctx.S(gh, 'Cipher Suites', ch.ciphers.length + ' 个: ' + ch.ciphers.slice(0, 8).map(function (c) { return CIPHERS[c] || '0x' + c.toString(16); }).join(', ') + (ch.ciphers.length > 8 ? ' …' : ''), fo, 0);
         if (ch.versions.length) ctx.S(gh, 'Supported Versions', ch.versions.map(function (v) { return TLSVER[v] || '0x' + v.toString(16); }).join(', '), fo, 0);
         if (ch.groups.length) ctx.S(gh, 'Supported Groups', ch.groups.map(function (v) { return GRPS[v] || v; }).join(', '), fo, 0);
+        if (ch.sigalgs.length) ctx.S(gh, 'Signature Algorithms', ch.sigalgs.map(function (v) { return SIGALG[v] || '0x' + v.toString(16); }).join(', '), fo, 0);
         if (ch.alpn.length) ctx.S(gh, 'ALPN', ch.alpn.join(', '), fo, 0);
         ctx.S(gh, 'Extensions', ch.exts.map(function (e) { return EXTN[e.t] || e.t; }).join(', '), fo, 0);
         ctx.S(gh, 'JA3', ch.ja3, fo, 0);
@@ -4114,7 +4155,7 @@ function eth(ctx, off, end) {
   A.parseClientHello = parseClientHello; A.parseServerHello = parseServerHello; A.parseCertMsg = parseCertMsg;
   A.parseCert = parseCert; A.der = der; A.oid = oid; A.CIPHERS = CIPHERS; A.TLSVER = TLSVER; A.HSTYPE = HSTYPE;
   A.EXTN = EXTN; A.DTYPE = DTYPE; A.DRCODE = DRCODE; A.DHMSG = DHMSG; A.httpLike = httpLike; A.headerLines = headerLines;
-  A.GRPS = GRPS;
+  A.GRPS = GRPS; A.SIGALG = SIGALG;
   PA.app = A;
 })();
 /* PacketLens · TLS decryption engine
@@ -6268,7 +6309,7 @@ if (r && !r.h) r.h = {};
           T.sni = ch.sni || ''; T.ja3 = ch.ja3; T.ja3str = ch.ja3str; T.alpn = ch.alpn.join(',');
           T.crandom = ch.random || '';                       // keylog 的索引键
           T.cver = ch.versions.length ? Math.max.apply(null, ch.versions) : ch.ver;
-          T.nciph = ch.ciphers.length; T.groups = ch.groups; T.ech = ch.ech;
+          T.nciph = ch.ciphers.length; T.groups = ch.groups; T.sigalgs = ch.sigalgs; T.ech = ch.ech;
           T.ja4a = ch.ja4a;
           var b12 = await U.sha256hex(strU8(ch.ja4bRaw)), c12 = await U.sha256hex(strU8(ch.ja4cRaw));
           T.ja4 = ch.ja4a + '_' + (b12 ? b12.slice(0, 12) : '000000000000') + '_' + (c12 ? c12.slice(0, 12) : '000000000000');
@@ -10548,7 +10589,7 @@ try {
     "JA3 指纹": "JA3 fingerprint", "活动时间": "Active time", "过滤该主机流量": "Filter Host Traffic",
     "协商版本": "Negotiated version", "客户端最高版本": "Client max version", "ALPN (客户端)": "ALPN (client)",
     "ALPN (服务端)": "ALPN (server)", "提供的套件数": "Ciphers offered", "弱套件数": "Weak ciphers",
-    "支持的曲线/群": "Supported groups", "JA3 字符串": "JA3 string",
+    "支持的曲线/群": "Supported groups", "签名算法（客户端）": "Signature algorithms (client)", "JA3 字符串": "JA3 string",
     "应用数据（客户端→服务端）": "App data (C→S)", "应用数据（服务端→客户端）": "App data (S→C)",
     "解密状态": "Decryption status", "解密出的明文": "Decrypted plaintext", "解密记录数": "Decrypted records",
     "解密备注": "Decryption note", "证书链": "Certificate chain", "查看握手包": "View handshake packet",
@@ -14888,6 +14929,7 @@ kpi($('dnsKpis'), [
       ['ALPN (客户端)', T.alpn || '-'], ['ALPN (服务端)', T.salpn || '-'],
       ['提供的套件数', T.nciph || '-'], ['弱套件数', T.weakCiphers || 0],
       ['支持的曲线/群', (T.groups || []).map(function (g) { return PA.app.GRPS[g] || g; }).join(', ') || '-'],
+      ['签名算法（客户端）', (T.sigalgs || []).map(function (v) { return PA.app.SIGALG[v] || ('0x' + v.toString(16)); }).join(', ') || '-'],
       ['JA3', T.ja3 || '-'], ['JA3 字符串', T.ja3str || '-'], ['JA3S', T.ja3s || '-'], ['JA4', T.ja4 || '-'],
       ['应用数据（客户端→服务端）', U.fmtBytes(T.cAppBytes || 0)], ['应用数据（服务端→客户端）', U.fmtBytes(T.sAppBytes || 0)],
       ['解密状态', (DECLB[T.decSt] ? DECLB[T.decSt][1] : (T.decSt || '未尝试')) + (T.decWhy ? ' — ' + T.decWhy : '')],
