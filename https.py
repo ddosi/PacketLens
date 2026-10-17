@@ -4,10 +4,13 @@
 from __future__ import print_function
 
 import argparse
+import datetime
 import os
 import posixpath
+import shutil
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -55,15 +58,17 @@ MESSAGES = {
         "cert_missing": "HTTPS requires certificate files. Missing: {0}",
         "cert_unreadable": "HTTPS requires readable certificate files; cannot read {0}: {1}",
         "cert_unusable": "HTTPS requires usable certificate files. Could not load {0} and {1}: {2}",
+        "cert_generating": "Generating self-signed certificate...",
+        "cert_generate_failed": ("Could not create certificate files {0} and {1}. Details: {2}. "
+                                 "Install the 'cryptography' Python package or put openssl on PATH, "
+                                 "or place your own cert.pem and key.pem next to this script."),
         "bind_denied": "Permission denied binding to {0}; choose a non-privileged port or check local security policy",
         "bind_used": "Address {0} is already in use; choose another port",
         "bind_failed": "Could not bind to {0}: {1}",
         "started": "HTTPS server started",
-        "directory": "Directory: {0}",
         "local_url": "Local URL: {0}",
         "lan_url": "LAN access: {0}",
         "lan_hint": "LAN access: use this computer's LAN IP with port {0}",
-        "trust_warning": "Other devices must trust the bundled certificate to avoid warnings.",
         "browser_failed": "Warning: could not open browser: {0}",
         "browser_manual": "Open this URL manually: {0}",
         "browser_none": "no browser accepted the URL",
@@ -88,15 +93,17 @@ MESSAGES = {
         "cert_missing": u"HTTPS 需要证书文件。缺少：{0}",
         "cert_unreadable": u"HTTPS 需要可读取的证书文件；无法读取 {0}：{1}",
         "cert_unusable": u"HTTPS 需要有效的证书文件。无法加载 {0} 和 {1}：{2}",
+        "cert_generating": u"正在生成自签名证书...",
+        "cert_generate_failed": (u"无法创建证书文件 {0} 和 {1}。详细信息：{2}。"
+                                 u"请安装 cryptography 库或将 openssl 加入 PATH，"
+                                 u"或在此脚本旁放置 cert.pem 和 key.pem。"),
         "bind_denied": u"没有权限绑定到 {0}；请选择非特权端口或检查本地安全策略",
         "bind_used": u"地址 {0} 已被占用；请选择其他端口",
         "bind_failed": u"无法绑定到 {0}：{1}",
         "started": u"HTTPS 服务器已启动",
-        "directory": u"目录：{0}",
         "local_url": u"本机网址：{0}",
         "lan_url": u"局域网访问：{0}",
         "lan_hint": u"局域网访问：请使用此计算机的局域网 IP 和端口 {0}",
-        "trust_warning": u"其他设备必须信任随附的证书，以避免浏览器警告。",
         "browser_failed": u"警告：无法打开浏览器：{0}",
         "browser_manual": u"请手动打开此网址：{0}",
         "browser_none": u"没有浏览器接受该网址",
@@ -227,6 +234,163 @@ def ssl_context():
     protocol = getattr(ssl, "PROTOCOL_TLS_SERVER",
                        getattr(ssl, "PROTOCOL_TLS", ssl.PROTOCOL_SSLv23))
     return ssl.SSLContext(protocol)
+
+
+def find_executable(name):
+    """Locate an executable on PATH with a Python 2.7 compatible fallback."""
+    which = getattr(shutil, "which", None)
+    if which is not None:
+        return which(name)
+    path_env = os.environ.get("PATH", "")
+    if os.name == "nt":
+        extensions = [".exe", ".bat", ".cmd", ""]
+        for directory in path_env.split(os.pathsep):
+            if not directory:
+                continue
+            for ext in extensions:
+                candidate = os.path.join(directory, name + ext)
+                if os.path.isfile(candidate):
+                    return candidate
+    else:
+        for directory in path_env.split(os.pathsep):
+            if not directory:
+                continue
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def _remove_if_exists(path):
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def _now_utc():
+    """UTC 'now' that avoids the deprecated datetime.utcnow() when possible."""
+    tz = getattr(datetime, "timezone", None)
+    if tz is not None:
+        return datetime.datetime.now(tz.utc)
+    return datetime.datetime.utcnow()
+
+
+def _generate_with_cryptography(cert_file, key_file):
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    try:
+        import ipaddress
+    except ImportError:
+        ipaddress = None
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, u"localhost"),
+    ])
+    now = _now_utc()
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=3650))
+    )
+    san = [x509.DNSName(u"localhost")]
+    if ipaddress is not None:
+        try:
+            san.append(x509.IPAddress(ipaddress.ip_address(u"127.0.0.1")))
+            san.append(x509.IPAddress(ipaddress.ip_address(u"::1")))
+        except Exception:
+            pass
+    builder = builder.add_extension(
+        x509.SubjectAlternativeName(san), critical=False)
+    builder = builder.add_extension(
+        x509.BasicConstraints(ca=True, path_length=None), critical=True)
+    cert = builder.sign(key, hashes.SHA256())
+
+    key_bytes = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption())
+    cert_bytes = cert.public_bytes(serialization.Encoding.PEM)
+
+    with open(key_file, "wb") as handle:
+        handle.write(key_bytes)
+    with open(cert_file, "wb") as handle:
+        handle.write(cert_bytes)
+
+
+def _generate_with_openssl(cert_file, key_file):
+    openssl = find_executable("openssl")
+    if not openssl:
+        raise RuntimeError("openssl executable not found on PATH")
+    base = [
+        openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-days", "3650", "-subj", "/CN=localhost",
+        "-keyout", key_file, "-out", cert_file,
+    ]
+    attempts = [
+        base + ["-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"],
+        base,
+    ]
+    last_error = "openssl failed"
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    for cmd in attempts:
+        _remove_if_exists(cert_file)
+        _remove_if_exists(key_file)
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=creationflags,
+            )
+        except OSError as exc:
+            raise RuntimeError("failed to start openssl: %s" % exc)
+        _, err = process.communicate()
+        if process.returncode == 0 and os.path.isfile(cert_file) and os.path.isfile(key_file):
+            return
+        if err:
+            try:
+                last_error = err.decode("utf-8", "replace").strip() or last_error
+            except Exception:
+                last_error = unicode_text(err) or last_error
+    _remove_if_exists(cert_file)
+    _remove_if_exists(key_file)
+    raise RuntimeError(last_error)
+
+
+def generate_self_signed_cert(cert_file, key_file):
+    """Try to create a self-signed certificate. Returns the generator name."""
+    errors = []
+
+    try:
+        _generate_with_cryptography(cert_file, key_file)
+        return "cryptography"
+    except Exception as exc:
+        errors.append("cryptography: %s" % exc)
+        _remove_if_exists(cert_file)
+        _remove_if_exists(key_file)
+
+    try:
+        _generate_with_openssl(cert_file, key_file)
+        return "openssl"
+    except Exception as exc:
+        errors.append("openssl: %s" % exc)
+        _remove_if_exists(cert_file)
+        _remove_if_exists(key_file)
+
+    raise RuntimeError("; ".join(errors) if errors else "no generator available")
 
 
 def ensure_certificate_files(cert_file, key_file, lang="en"):
@@ -369,6 +533,18 @@ def run(args):
     key_file = os.path.abspath(args.key)
     if not os.path.isdir(directory):
         raise RuntimeError(message(lang, "not_directory", directory))
+
+    # Only auto-generate when *both* files are absent.  If the user already
+    # supplied one of them we leave it untouched and let the normal checks
+    # report the missing half instead of overwriting existing material.
+    if not os.path.isfile(cert_file) and not os.path.isfile(key_file):
+        write_line(sys.stdout, message(lang, "cert_generating"))
+        try:
+            generate_self_signed_cert(cert_file, key_file)
+        except Exception as exc:
+            raise RuntimeError(message(lang, "cert_generate_failed",
+                                       cert_file, key_file, exc))
+
     ensure_certificate_files(cert_file, key_file, lang)
     try:
         httpd = server_class(args.bind)((args.bind, args.port), Handler)
@@ -386,7 +562,6 @@ def run(args):
         url = "https://%s:%s/" % (display_host(open_host), port)
 
         write_line(sys.stdout, message(lang, "started"))
-        write_line(sys.stdout, message(lang, "directory", directory))
         write_line(sys.stdout, message(lang, "local_url", url))
         if wildcard:
             lan_host = local_lan_address()
@@ -395,7 +570,6 @@ def run(args):
                 write_line(sys.stdout, message(lang, "lan_url", lan_url))
             else:
                 write_line(sys.stdout, message(lang, "lan_hint", port))
-            write_line(sys.stdout, message(lang, "trust_warning"))
 
         # The delay runs in a daemon thread.  By the time it expires,
         # serve_forever below is already processing connections.
@@ -496,4 +670,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
